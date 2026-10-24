@@ -15,7 +15,7 @@ A cost-aware agent router: **per-task token budgets**, **complexity-based model 
 - **Confidence-gated cascade:** a cheap model answers first with a self-reported confidence; the router exits early at the threshold or escalates one tier at a time.
 - **Hard per-task budgets:** token and USD caps size `max_tokens` before each call, downgrade tiers under pressure, and never make a call whose allowance doesn't fit.
 - **Cost-per-decision analytics:** every decision (attempts, tokens, USD, exit reason, counterfactual baseline cost) is logged to local JSONL and summarized with p50/p95, per-model and per-tier breakdowns.
-- **Measured in the bundled demo (simulated models, 36 tasks):** routed cost $0.0646 vs $0.1148 always-premium, a 43.7% reduction, with 14% of tasks escalating; 53 offline tests pass.
+- **Measured in the bundled demo (simulated models, 36 tasks):** routed cost $0.0646 vs $0.1148 always-premium, a 43.7% reduction, with 14% of tasks escalating; 54 offline tests pass.
 
 ## Architecture
 
@@ -158,7 +158,7 @@ The demo is a **simulation**: model confidence and answer lengths are scripted, 
 
 ## How the tests prove each capability
 
-All 53 tests are offline (`FakeClient`; `ChatAnthropic` is stubbed).
+All 54 tests are offline (`FakeClient`; `ChatAnthropic` is stubbed).
 
 | Capability | Tests |
 |---|---|
@@ -167,5 +167,5 @@ All 53 tests are offline (`FakeClient`; `ChatAnthropic` is stubbed).
 | **Token budgeting** | `test_budget.py` (allowance math, USD and token caps, overshoot clamp); `test_router.py` budget tests: `max_tokens` capped on the wire, no call when nothing fits, strict mode raises, USD cap downgrades premium to a cheaper model, escalation stops (and never re-calls a lower tier) when the next tier is unaffordable |
 | **Cost-per-decision analytics** | `test_analytics.py`: JSONL round-trip, totals equal sum of decisions, p50/p95, per-model/tier breakdown, escalation rate, ≥40% savings vs always-premium on easy-heavy traffic, and negative savings reported honestly when the baseline is cheaper; `test_router.py`: an unanswered task adds no baseline cost |
 | **LangGraph structure** | `test_router.py`: expected nodes and conditional edges exist, an explicitly supplied checkpointer records monotonic per-step spend ending at the decision's cost, re-running a task id starts from a clean state and `history()` shows the latest run, `history()` without a checkpointer fails clearly, recursion limit covers the worst-case three-tier path |
-| **README diagrams** | `test_readme_diagrams.py`: the flow diagram in this README must equal the compiled graph's Mermaid output (regenerate with `python scripts/render_graph.py`) |
+| **README diagrams** | `test_readme_diagrams.py`: the flow diagram's nodes and edges in this README must match the compiled graph (regenerate with `python scripts/render_graph.py`) |
 | **Config, CLI, client** | `test_config_cli.py` (env overrides, `.env` precedence, demo end-to-end, demo savings in the 40–70% band, clean failure without an API key); `test_anthropic_client.py` (request/usage mapping) |
