@@ -78,6 +78,7 @@ def test_budget_too_small_makes_no_call(settings):
     client = by_model(settings, {"fast": 0.95, "balanced": 0.95, "premium": 0.95})
     d = CostAwareRouter(client, settings).run(Task(prompt=EASY, budget_tokens=10))
     assert client.calls == [] and d.exit_reason == ExitReason.NO_BUDGET and d.final_model is None
+    assert d.baseline_cost_usd == 0.0 and d.savings_usd == 0.0
 
 
 def test_strict_budget_raises(settings):
@@ -133,6 +134,18 @@ def test_checkpointer_records_step_by_step_state(settings):
     assert states[-1]["decision"].task_id == "t1"
     spent = [s.get("spent_usd", 0.0) for s in states]
     assert spent == sorted(spent) and spent[-1] == pytest.approx(d.cost_usd)
+
+
+def test_rerunning_a_task_id_starts_from_a_clean_state(settings):
+    client = by_model(settings, {"fast": 0.0, "balanced": 0.0, "premium": 0.0})
+    router = CostAwareRouter(client, settings, checkpointer=MemorySaver(serde=CHECKPOINT_SERDE))
+    first = router.run(Task(id="t1", prompt=EASY))
+    second = router.run(Task(id="t1", prompt=EASY))
+    assert len(second.attempts) == len(first.attempts) == 3
+    assert second.cost_usd == pytest.approx(first.cost_usd)
+    states = router.history("t1")
+    assert states[-1]["decision"].cost_usd == pytest.approx(second.cost_usd)
+    assert len(states[-1]["attempts"]) == 3
 
 
 def test_history_requires_a_checkpointer(settings):

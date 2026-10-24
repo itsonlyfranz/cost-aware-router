@@ -15,7 +15,7 @@ A cost-aware agent router: **per-task token budgets**, **complexity-based model 
 - **Confidence-gated cascade:** a cheap model answers first with a self-reported confidence; the router exits early at the threshold or escalates one tier at a time.
 - **Hard per-task budgets:** token and USD caps size `max_tokens` before each call, downgrade tiers under pressure, and never make a call whose allowance doesn't fit.
 - **Cost-per-decision analytics:** every decision (attempts, tokens, USD, exit reason, counterfactual baseline cost) is logged to local JSONL and summarized with p50/p95, per-model and per-tier breakdowns.
-- **Measured in the bundled demo (simulated models, 36 tasks):** routed cost $0.0646 vs $0.1148 always-premium, a 43.7% reduction, with 14% of tasks escalating; 47 offline tests pass.
+- **Measured in the bundled demo (simulated models, 36 tasks):** routed cost $0.0646 vs $0.1148 always-premium, a 43.7% reduction, with 14% of tasks escalating; 49 offline tests pass.
 
 ## Architecture
 
@@ -108,7 +108,7 @@ The demo is a **simulation**: model confidence and answer lengths are scripted, 
 - **Escalate one tier at a time, from the starting tier.** Minimises spend when the heuristic was right; the cost of a wrong guess is the wasted lower-tier calls (visible in `escalation rate`).
 - **Budgets are pre-flight estimates plus post-hoc charging.** Input tokens are estimated (~4 chars/token) to size `max_tokens` before each call; real usage is charged afterwards. A call is only made if a useful output allowance fits, so overshoot is bounded to estimation error. If the next tier doesn't fit, the router stops and returns the best answer already paid for rather than silently exceeding the budget (`strict_budget=True` raises `BudgetExceeded` instead).
 - **Budget pressure downgrades before it fails.** A premium-complexity task under a tight USD cap runs on a cheaper tier and is flagged in `route_reason`.
-- **Savings are measured against a counterfactual.** Baseline = one call on the baseline tier with the same prompt and the final answer's output length. It's an estimate, and it can be negative per decision (routing can cost more than the baseline) — aggregated numbers include those.
+- **Savings are measured against a counterfactual.** Baseline = one call on the baseline tier with the final answer's measured input and output tokens; a task that got no answer has no baseline, so it never counts as savings. It's an estimate, and it can be negative per decision (routing can cost more than the baseline) — aggregated numbers include those.
 - **Local-first storage.** Decisions are an append-only JSONL file; no database or hosted service.
 - **LangGraph where it fits, not everywhere.** The cascade is a real cycle with conditional exits, which is what `StateGraph` is for; opt-in checkpointing (`CostAwareRouter(..., checkpointer=MemorySaver(serde=CHECKPOINT_SERDE))`) gives a per-step audit trail (`router.history(task_id)`); it is off by default so a long-lived router does not hold every task's state in memory, and the JSONL decision log remains the default audit record and the recursion limit bounds a routing loop. I did not add interrupts or parallel branches: the loop is inherently sequential (each escalation depends on the previous confidence), and a human-in-the-loop pause would defeat per-task cost control.
 - **LLM behind a one-method protocol** (`LLMClient.complete`), so the whole suite runs offline against `FakeClient`.
@@ -116,13 +116,13 @@ The demo is a **simulation**: model confidence and answer lengths are scripted, 
 
 ## How the tests prove each capability
 
-All 47 tests are offline (`FakeClient`; `ChatAnthropic` is stubbed).
+All 49 tests are offline (`FakeClient`; `ChatAnthropic` is stubbed).
 
 | Capability | Tests |
 |---|---|
 | **Complexity routing** | `test_complexity.py` (easy→FAST, design/debug→PREMIUM, medium→BALANCED, monotonic score); `test_router.py::test_routes_easy_task_to_cheapest_model`, `test_routes_hard_task_straight_to_premium` assert exactly which model the client was called with |
 | **Early exit on confidence** | `test_early_exit_when_confident_skips_higher_tiers`, `test_low_confidence_escalates_one_tier_at_a_time`, `test_top_tier_answer_is_accepted_even_if_unconfident`, `test_threshold_is_configurable`, `test_unparseable_reply_counts_as_not_confident`; parser behaviour in `test_confidence.py` |
 | **Token budgeting** | `test_budget.py` (allowance math, USD and token caps, overshoot clamp); `test_router.py` budget tests: `max_tokens` capped on the wire, no call when nothing fits, strict mode raises, USD cap downgrades premium to a cheaper model, escalation stops (and never re-calls a lower tier) when the next tier is unaffordable |
-| **Cost-per-decision analytics** | `test_analytics.py`: JSONL round-trip, totals equal sum of decisions, p50/p95, per-model/tier breakdown, escalation rate, ≥40% savings vs always-premium on easy-heavy traffic, and negative savings reported honestly when the baseline is cheaper |
-| **LangGraph structure** | `test_router.py`: expected nodes and conditional edges exist, an explicitly supplied checkpointer records monotonic per-step spend ending at the decision's cost, `history()` without one fails clearly, recursion limit covers the worst-case three-tier path |
+| **Cost-per-decision analytics** | `test_analytics.py`: JSONL round-trip, totals equal sum of decisions, p50/p95, per-model/tier breakdown, escalation rate, ≥40% savings vs always-premium on easy-heavy traffic, and negative savings reported honestly when the baseline is cheaper; `test_router.py`: an unanswered task adds no baseline cost |
+| **LangGraph structure** | `test_router.py`: expected nodes and conditional edges exist, an explicitly supplied checkpointer records monotonic per-step spend ending at the decision's cost, re-running a task id starts from a clean state and `history()` shows the latest run, `history()` without a checkpointer fails clearly, recursion limit covers the worst-case three-tier path |
 | **Config, CLI, client** | `test_config_cli.py` (env overrides, `.env` precedence, demo end-to-end, demo savings in the 40–70% band, clean failure without an API key); `test_anthropic_client.py` (request/usage mapping) |

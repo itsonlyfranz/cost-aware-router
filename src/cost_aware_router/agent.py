@@ -83,8 +83,9 @@ class CostAwareRouter:
     def run(self, task: Task | str) -> Decision:
         if isinstance(task, str):
             task = Task(prompt=task)
+        fresh = RouterState(task=task)
         out = self.graph.invoke(
-            {"task": task},
+            {k: getattr(fresh, k) for k in RouterState.model_fields},
             config={"configurable": {"thread_id": task.id}, "recursion_limit": RECURSION_LIMIT},
         )
         return out["decision"]
@@ -94,7 +95,9 @@ class CostAwareRouter:
         if self.checkpointer is None:
             raise RuntimeError("history() needs a checkpointer: pass checkpointer=MemorySaver(serde=CHECKPOINT_SERDE)")
         config = {"configurable": {"thread_id": task_id}}
-        return [snap.values for snap in reversed(list(self.graph.get_state_history(config)))]  # type: ignore[misc]
+        snaps = list(self.graph.get_state_history(config))
+        latest = next(i for i, snap in enumerate(snaps) if snap.metadata.get("source") == "input")
+        return [snap.values for snap in reversed(snaps[: latest + 1])]  # type: ignore[misc]
 
     # ---- nodes ---------------------------------------------------------------------------------
 
@@ -179,9 +182,10 @@ class CostAwareRouter:
             last = decision.attempts[-1]
             last.accepted = True
             decision.final_model, decision.answer, decision.confidence = last.model, last.answer, last.confidence
-        # Counterfactual: same prompt and answer length on the baseline model, one call, no cascade.
-        out = decision.attempts[-1].usage.output_tokens if decision.attempts else self.max_output_tokens // 2
-        decision.baseline_cost_usd = baseline.cost(s.input_est, out)
+        # Counterfactual: same prompt and answer length on the baseline model, one call, no cascade; nothing if unanswered.
+        if decision.attempts:
+            usage = decision.attempts[-1].usage
+            decision.baseline_cost_usd = baseline.cost(usage.input_tokens, usage.output_tokens)
         if self.store:
             self.store.append(decision)
         return {"decision": decision}
