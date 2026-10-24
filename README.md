@@ -2,7 +2,19 @@
 
 A cost-aware agent router: **per-task token budgets**, **complexity-based model routing**, **early exit on confidence**, and **cost-per-decision analytics**, built on the Anthropic Claude API.
 
-**What it demonstrates:** most agent traffic doesn't need your most expensive model. Routing each task to the cheapest model that can handle it, stopping as soon as the answer is confident, and capping spend per task cuts inference cost substantially. On the bundled easy-heavy demo workload the router spends **~44% less** than sending everything to the premium model (see [the caveat](#what-the-numbers-do-and-dont-mean) before quoting that).
+> Cost-aware agent router: per-task token budgets, complexity-based model routing, confidence early exit, and cost-per-decision analytics on the Anthropic Claude API.
+
+**Technologies:** Python 3.11+, Anthropic SDK, Pydantic v2, pytest · **Category:** AI agents / cost optimization
+
+**What it demonstrates:** most agent traffic doesn't need your most expensive model. Routing each task to the cheapest model that can handle it, stopping as soon as the answer is confident, and capping spend per task cuts inference cost substantially. See [the caveat](#what-the-numbers-do-and-dont-mean) before quoting any number below.
+
+## Highlights
+
+- **Complexity routing at zero cost:** a heuristic scorer (length, reasoning keywords, code, step count) picks a starting tier from fast, balanced or premium with no LLM call.
+- **Confidence-gated cascade:** a cheap model answers first with a self-reported confidence; the router exits early at the threshold or escalates one tier at a time.
+- **Hard per-task budgets:** token and USD caps size `max_tokens` before each call, downgrade tiers under pressure, and never make a call whose allowance doesn't fit.
+- **Cost-per-decision analytics:** every decision (attempts, tokens, USD, exit reason, counterfactual baseline cost) is logged to local JSONL and summarized with p50/p95, per-model and per-tier breakdowns.
+- **Measured in the bundled demo (simulated models, 36 tasks):** routed cost $0.0646 vs $0.1148 always-premium, a 43.7% reduction, with 14% of tasks escalating; 44 offline tests pass.
 
 ## Architecture
 
@@ -34,7 +46,7 @@ A cost-aware agent router: **per-task token budgets**, **complexity-based model 
         Decision (attempts, tokens, USD, baseline USD, exit reason) → JSONL log → analytics
 ```
 
-| Module | Role |
+| Component | Responsibility |
 |---|---|
 | `models.py` | Pydantic v2 models: `Task`, `Attempt`, `Decision`, `ModelSpec`, `Tier` |
 | `complexity.py` | Heuristic prompt-complexity score → starting tier |
