@@ -144,6 +144,9 @@ def test_rerunning_a_task_id_starts_from_a_clean_state(settings):
     assert len(second.attempts) == len(first.attempts) == 3
     assert second.cost_usd == pytest.approx(first.cost_usd)
     states = router.history("t1")
+    assert not states[0].get("attempts") and states[0].get("spent_usd", 0.0) == 0.0
+    spent = [s.get("spent_usd", 0.0) for s in states]
+    assert spent == sorted(spent)
     assert states[-1]["decision"].cost_usd == pytest.approx(second.cost_usd)
     assert len(states[-1]["attempts"]) == 3
 

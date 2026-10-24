@@ -96,8 +96,8 @@ class CostAwareRouter:
             raise RuntimeError("history() needs a checkpointer: pass checkpointer=MemorySaver(serde=CHECKPOINT_SERDE)")
         config = {"configurable": {"thread_id": task_id}}
         snaps = list(self.graph.get_state_history(config))
-        latest = next((i for i, snap in enumerate(snaps) if snap.metadata.get("source") == "input"), -1)
-        return [snap.values for snap in reversed(snaps[: latest + 1])]  # type: ignore[misc]
+        latest = next((i for i, snap in enumerate(snaps) if snap.metadata.get("source") == "input"), 0)
+        return [snap.values for snap in reversed(snaps[:latest])]  # type: ignore[misc]
 
     # ---- nodes ---------------------------------------------------------------------------------
 
