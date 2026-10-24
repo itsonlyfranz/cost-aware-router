@@ -1,50 +1,38 @@
 # cost-aware-router
 
-A cost-aware agent router: **per-task token budgets**, **complexity-based model routing**, **early exit on confidence**, and **cost-per-decision analytics**, built on the Anthropic Claude API.
+A cost-aware agent router: **per-task token budgets**, **complexity-based model routing**, **early exit on confidence**, and **cost-per-decision analytics**, built on the Anthropic Claude API, orchestrated as a LangGraph `StateGraph`.
 
-> Cost-aware agent router: per-task token budgets, complexity-based model routing, confidence early exit, and cost-per-decision analytics on the Anthropic Claude API.
+> Cost-aware agent router: per-task token budgets, complexity-based model routing, confidence early exit, and cost-per-decision analytics on the Anthropic Claude API, orchestrated as a LangGraph `StateGraph`.
 
-**Technologies:** Python 3.11+, Anthropic SDK, Pydantic v2, pytest · **Category:** AI agents / cost optimization
+**Technologies:** Python 3.11+, LangGraph, langchain-anthropic (Claude), Pydantic v2, pytest · **Category:** AI agents / cost optimization
 
 **What it demonstrates:** most agent traffic doesn't need your most expensive model. Routing each task to the cheapest model that can handle it, stopping as soon as the answer is confident, and capping spend per task cuts inference cost substantially. See [the caveat](#what-the-numbers-do-and-dont-mean) before quoting any number below.
 
 ## Highlights
 
+- **LangGraph state machine:** the agent flow is a `StateGraph` with typed Pydantic state, five explicit nodes, conditional edges for the escalate/exit decision, a recursion limit as a loop safety net, and a checkpointer that records state after every step so any decision can be replayed and audited.
 - **Complexity routing at zero cost:** a heuristic scorer (length, reasoning keywords, code, step count) picks a starting tier from fast, balanced or premium with no LLM call.
 - **Confidence-gated cascade:** a cheap model answers first with a self-reported confidence; the router exits early at the threshold or escalates one tier at a time.
 - **Hard per-task budgets:** token and USD caps size `max_tokens` before each call, downgrade tiers under pressure, and never make a call whose allowance doesn't fit.
 - **Cost-per-decision analytics:** every decision (attempts, tokens, USD, exit reason, counterfactual baseline cost) is logged to local JSONL and summarized with p50/p95, per-model and per-tier breakdowns.
-- **Measured in the bundled demo (simulated models, 36 tasks):** routed cost $0.0646 vs $0.1148 always-premium, a 43.7% reduction, with 14% of tasks escalating; 44 offline tests pass.
+- **Measured in the bundled demo (simulated models, 36 tasks):** routed cost $0.0646 vs $0.1148 always-premium, a 43.7% reduction, with 14% of tasks escalating; 47 offline tests pass.
 
 ## Architecture
 
+Nodes of the LangGraph `StateGraph` (typed `RouterState`, checkpointed after every node):
+
 ```
-            Task(prompt, budget_tokens?, budget_usd?)
-                         │
-                         ▼
-              ┌─────────────────────┐
-              │ complexity scorer   │  heuristic, zero-cost (length, reasoning keywords, code, steps)
-              └─────────┬───────────┘
-                        │ starting tier: FAST / BALANCED / PREMIUM
-                        ▼
-   ┌──────────────► budget gate ── can this tier's call fit the remaining token/USD budget?
-   │                    │ no → downgrade to the nearest cheaper tier that fits (never below
-   │                    │      tiers already tried); none fits → stop (keep best paid answer)
-   │                    ▼ yes
-   │              LLM call (max_tokens capped to budget allowance)
-   │                    │
-   │                    ▼
-   │         parse {"answer", "confidence"}
-   │           │                    │
-   │   conf ≥ threshold        conf < threshold (or unparseable)
-   │           ▼                    ▼
-   │      EARLY EXIT          at PREMIUM? ── yes → accept answer
-   │                                │ no
-   └────────────────────────────────┘ escalate one tier
-                        │
-                        ▼
-        Decision (attempts, tokens, USD, baseline USD, exit reason) → JSONL log → analytics
+ START ─► classify ─► plan_call ──(model fits budget)──► call_model ─► evaluate ──(exit_reason set)──► finalize ─► END
+          heuristic    │  ▲        LLM call, max_tokens     parse     │
+          complexity   │  │        capped to allowance      answer +  │ conf < threshold and not PREMIUM:
+          → start tier │  │                                 confidence│ tier += 1 (escalate)
+                       │  └───────────────────────────────────────────┘
+                       └─(nothing affordable)──────────────────────────────────────────────────► finalize
 ```
+
+- `plan_call` is the budget gate: it picks the wanted tier, or the nearest cheaper tier (never below tiers already tried) that fits the remaining token/USD budget. If none fits it routes straight to `finalize`, which keeps the best answer already paid for.
+- `evaluate` is the early-exit decision: confidence at or above the threshold exits; otherwise escalate one tier; at PREMIUM the answer is accepted.
+- `finalize` assembles the `Decision` (attempts, tokens, USD, counterfactual baseline USD, exit reason) and appends it to the JSONL log.
 
 | Component | Responsibility |
 |---|---|
@@ -52,9 +40,9 @@ A cost-aware agent router: **per-task token budgets**, **complexity-based model 
 | `complexity.py` | Heuristic prompt-complexity score → starting tier |
 | `budget.py` | `TokenBudget`: token + USD limits, output allowance, charging actual usage |
 | `confidence.py` | Structured-output prompt and robust parser for the confidence signal |
-| `agent.py` | `CostAwareRouter`: the routing / escalation / early-exit loop |
+| `agent.py` | `CostAwareRouter`: builds and runs the LangGraph `StateGraph` (`RouterState`, nodes, conditional edges, checkpointer, recursion limit) |
 | `analytics.py` | Local JSONL `DecisionStore`, `summarize()`, text `render()` |
-| `client.py` | `LLMClient` protocol, `AnthropicClient`, offline `FakeClient` |
+| `client.py` | `LLMClient` protocol, `AnthropicClient` (Claude via `langchain-anthropic`), offline `FakeClient` |
 | `simulation.py` | Deterministic simulated models and demo workload |
 | `cli.py` | `car demo`, `car run`, `car report` |
 
@@ -122,12 +110,13 @@ The demo is a **simulation**: model confidence and answer lengths are scripted, 
 - **Budget pressure downgrades before it fails.** A premium-complexity task under a tight USD cap runs on a cheaper tier and is flagged in `route_reason`.
 - **Savings are measured against a counterfactual.** Baseline = one call on the baseline tier with the same prompt and the final answer's output length. It's an estimate, and it can be negative per decision (routing can cost more than the baseline) — aggregated numbers include those.
 - **Local-first storage.** Decisions are an append-only JSONL file; no database or hosted service.
+- **LangGraph where it fits, not everywhere.** The cascade is a real cycle with conditional exits, which is what `StateGraph` is for; checkpointing gives a per-step audit trail (`router.history(task_id)`) and the recursion limit bounds a routing loop. I did not add interrupts or parallel branches: the loop is inherently sequential (each escalation depends on the previous confidence), and a human-in-the-loop pause would defeat per-task cost control.
 - **LLM behind a one-method protocol** (`LLMClient.complete`), so the whole suite runs offline against `FakeClient`.
 - **Out of scope:** streaming, tool-use loops, caching, async/concurrency, a web UI, deployment.
 
 ## How the tests prove each capability
 
-All 44 tests are offline (`FakeClient`; the Anthropic SDK is stubbed).
+All 47 tests are offline (`FakeClient`; `ChatAnthropic` is stubbed).
 
 | Capability | Tests |
 |---|---|
@@ -135,4 +124,5 @@ All 44 tests are offline (`FakeClient`; the Anthropic SDK is stubbed).
 | **Early exit on confidence** | `test_early_exit_when_confident_skips_higher_tiers`, `test_low_confidence_escalates_one_tier_at_a_time`, `test_top_tier_answer_is_accepted_even_if_unconfident`, `test_threshold_is_configurable`, `test_unparseable_reply_counts_as_not_confident`; parser behaviour in `test_confidence.py` |
 | **Token budgeting** | `test_budget.py` (allowance math, USD and token caps, overshoot clamp); `test_router.py` budget tests: `max_tokens` capped on the wire, no call when nothing fits, strict mode raises, USD cap downgrades premium to a cheaper model, escalation stops (and never re-calls a lower tier) when the next tier is unaffordable |
 | **Cost-per-decision analytics** | `test_analytics.py`: JSONL round-trip, totals equal sum of decisions, p50/p95, per-model/tier breakdown, escalation rate, ≥40% savings vs always-premium on easy-heavy traffic, and negative savings reported honestly when the baseline is cheaper |
+| **LangGraph structure** | `test_router.py`: expected nodes and conditional edges exist, checkpointer records monotonic per-step spend ending at the decision's cost, recursion limit covers the worst-case three-tier path |
 | **Config, CLI, client** | `test_config_cli.py` (env overrides, `.env` precedence, demo end-to-end, demo savings in the 40–70% band, clean failure without an API key); `test_anthropic_client.py` (request/usage mapping) |

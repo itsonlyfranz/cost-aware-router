@@ -108,3 +108,33 @@ def test_total_spend_never_triggers_call_beyond_budget(settings):
     client = by_model(settings, {"fast": 0.1, "balanced": 0.1, "premium": 0.1})
     d = CostAwareRouter(client, settings, max_output_tokens=64).run(Task(prompt=EASY, budget_tokens=400))
     assert d.total_tokens <= 400 + 64  # a call is only made if its allowance fits; actual usage can slightly differ
+
+
+# --- LangGraph structure -------------------------------------------------------------------------
+
+
+def test_graph_has_explicit_nodes_and_conditional_edges(settings):
+    router = CostAwareRouter(by_model(settings, {"fast": 0.9, "balanced": 0.9, "premium": 0.9}), settings)
+    g = router.graph.get_graph()
+    assert {"classify", "plan_call", "call_model", "evaluate", "finalize"} <= set(g.nodes)
+    conditional = {(e.source, e.target) for e in g.edges if e.conditional}
+    assert {("plan_call", "call_model"), ("plan_call", "finalize"),
+            ("evaluate", "plan_call"), ("evaluate", "finalize")} <= conditional
+
+
+def test_checkpointer_records_step_by_step_state(settings):
+    client = by_model(settings, {"fast": 0.1, "balanced": 0.95, "premium": 0.95})
+    router = CostAwareRouter(client, settings)
+    d = router.run(Task(id="t1", prompt=EASY))
+    states = router.history("t1")
+    assert len(states) > 5
+    assert states[-1]["decision"].task_id == "t1"
+    spent = [s.get("spent_usd", 0.0) for s in states]
+    assert spent == sorted(spent) and spent[-1] == pytest.approx(d.cost_usd)
+
+
+def test_recursion_limit_bounds_the_worst_case_path(settings):
+    from cost_aware_router.agent import RECURSION_LIMIT
+    client = by_model(settings, {"fast": 0.0, "balanced": 0.0, "premium": 0.0})
+    d = CostAwareRouter(client, settings).run(EASY)  # full fast->balanced->premium cascade
+    assert len(d.attempts) == 3 and RECURSION_LIMIT >= 2 + 3 * 3

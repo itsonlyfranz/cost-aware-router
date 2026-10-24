@@ -5,7 +5,8 @@ description = "Cost-aware agent router: per-task token budgets, complexity-based
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "anthropic>=0.40",
+    "langgraph>=1.0",
+    "langchain-anthropic>=1.0",
     "pydantic>=2.6",
 ]
 

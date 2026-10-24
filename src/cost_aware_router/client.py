@@ -18,26 +18,23 @@ class LLMClient(Protocol):
 
 
 class AnthropicClient:
-    """Thin wrapper over the official `anthropic` SDK."""
+    """Claude via `langchain-anthropic` (ChatAnthropic), which wraps the official `anthropic` SDK."""
 
     def __init__(self, api_key: str | None = None) -> None:
-        import anthropic
-
-        self._client = anthropic.Anthropic(api_key=api_key)
+        self._api_key = api_key
 
     def complete(self, request: LLMRequest) -> LLMResponse:
-        kwargs: dict = {
-            "model": request.model,
-            "max_tokens": request.max_tokens,
-            "messages": [{"role": "user", "content": request.prompt}],
-        }
-        if request.system:
-            kwargs["system"] = request.system
-        msg = self._client.messages.create(**kwargs)
-        text = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
+        from langchain_anthropic import ChatAnthropic
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        chat = ChatAnthropic(model=request.model, max_tokens=request.max_tokens, api_key=self._api_key)
+        messages = ([SystemMessage(request.system)] if request.system else []) + [HumanMessage(request.prompt)]
+        msg = chat.invoke(messages)
+        usage = msg.usage_metadata or {}
+        text = msg.text() if callable(msg.text) else msg.text
         return LLMResponse(
             text=text,
-            usage=Usage(input_tokens=msg.usage.input_tokens, output_tokens=msg.usage.output_tokens),
+            usage=Usage(input_tokens=usage.get("input_tokens", 0), output_tokens=usage.get("output_tokens", 0)),
             model=request.model,
         )
 
