@@ -148,6 +148,12 @@ def test_rerunning_a_task_id_starts_from_a_clean_state(settings):
     assert len(states[-1]["attempts"]) == 3
 
 
+def test_history_of_unknown_task_is_empty(settings):
+    router = CostAwareRouter(by_model(settings, {"fast": 0.95, "balanced": 0.95, "premium": 0.95}), settings,
+                             checkpointer=MemorySaver(serde=CHECKPOINT_SERDE))
+    assert router.history("never-ran") == []
+
+
 def test_history_requires_a_checkpointer(settings):
     router = CostAwareRouter(by_model(settings, {"fast": 0.95, "balanced": 0.95, "premium": 0.95}), settings)
     router.run(Task(id="t1", prompt=EASY))

@@ -15,7 +15,7 @@ A cost-aware agent router: **per-task token budgets**, **complexity-based model 
 - **Confidence-gated cascade:** a cheap model answers first with a self-reported confidence; the router exits early at the threshold or escalates one tier at a time.
 - **Hard per-task budgets:** token and USD caps size `max_tokens` before each call, downgrade tiers under pressure, and never make a call whose allowance doesn't fit.
 - **Cost-per-decision analytics:** every decision (attempts, tokens, USD, exit reason, counterfactual baseline cost) is logged to local JSONL and summarized with p50/p95, per-model and per-tier breakdowns.
-- **Measured in the bundled demo (simulated models, 36 tasks):** routed cost $0.0646 vs $0.1148 always-premium, a 43.7% reduction, with 14% of tasks escalating; 49 offline tests pass.
+- **Measured in the bundled demo (simulated models, 36 tasks):** routed cost $0.0646 vs $0.1148 always-premium, a 43.7% reduction, with 14% of tasks escalating; 50 offline tests pass.
 
 ## Architecture
 
@@ -116,7 +116,7 @@ The demo is a **simulation**: model confidence and answer lengths are scripted, 
 
 ## How the tests prove each capability
 
-All 49 tests are offline (`FakeClient`; `ChatAnthropic` is stubbed).
+All 50 tests are offline (`FakeClient`; `ChatAnthropic` is stubbed).
 
 | Capability | Tests |
 |---|---|
