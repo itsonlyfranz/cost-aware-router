@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
@@ -21,13 +20,14 @@ from cost_aware_router.models import Attempt, Decision, ExitReason, LLMRequest, 
 # Three tiers therefore need at most 11 steps; the limit is a safety net against routing loops.
 RECURSION_LIMIT = 25
 
-_SERDE = JsonPlusSerializer(
+# Pass to a checkpointer (e.g. MemorySaver(serde=CHECKPOINT_SERDE)) so RouterState round-trips.
+CHECKPOINT_SERDE = JsonPlusSerializer(
     allowed_msgpack_modules=[("cost_aware_router.models", n) for n in ("Task", "Tier", "ModelSpec", "Attempt", "Usage", "Decision")]
 )
 
 
 class RouterState(BaseModel):
-    """Everything the graph knows about one task; checkpointed after every node."""
+    """Everything the graph knows about one task; checkpointed after every node when a checkpointer is set."""
 
     task: Task
     complexity_score: float = 0.0
@@ -60,7 +60,7 @@ class CostAwareRouter:
         self.max_output_tokens = max_output_tokens
         self.strict_budget = strict_budget
         self.by_tier: dict[Tier, ModelSpec] = {m.tier: m for m in self.settings.models()}
-        self.checkpointer = checkpointer if checkpointer is not None else MemorySaver(serde=_SERDE)
+        self.checkpointer = checkpointer
         self.graph = self._build()
 
     # ---- graph ---------------------------------------------------------------------------------
@@ -91,6 +91,8 @@ class CostAwareRouter:
 
     def history(self, task_id: str) -> list[RouterState]:
         """Checkpointed states for a finished task, oldest first (one per graph step)."""
+        if self.checkpointer is None:
+            raise RuntimeError("history() needs a checkpointer: pass checkpointer=MemorySaver(serde=CHECKPOINT_SERDE)")
         config = {"configurable": {"thread_id": task_id}}
         return [snap.values for snap in reversed(list(self.graph.get_state_history(config)))]  # type: ignore[misc]
 

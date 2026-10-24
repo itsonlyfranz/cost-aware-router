@@ -1,7 +1,9 @@
 import pytest
 from conftest import EASY, HARD, by_model, reply
 
-from cost_aware_router.agent import CostAwareRouter
+from langgraph.checkpoint.memory import MemorySaver
+
+from cost_aware_router.agent import CHECKPOINT_SERDE, CostAwareRouter
 from cost_aware_router.budget import BudgetExceeded
 from cost_aware_router.client import FakeClient
 from cost_aware_router.models import ExitReason, Task, Tier
@@ -124,13 +126,20 @@ def test_graph_has_explicit_nodes_and_conditional_edges(settings):
 
 def test_checkpointer_records_step_by_step_state(settings):
     client = by_model(settings, {"fast": 0.1, "balanced": 0.95, "premium": 0.95})
-    router = CostAwareRouter(client, settings)
+    router = CostAwareRouter(client, settings, checkpointer=MemorySaver(serde=CHECKPOINT_SERDE))
     d = router.run(Task(id="t1", prompt=EASY))
     states = router.history("t1")
     assert len(states) > 5
     assert states[-1]["decision"].task_id == "t1"
     spent = [s.get("spent_usd", 0.0) for s in states]
     assert spent == sorted(spent) and spent[-1] == pytest.approx(d.cost_usd)
+
+
+def test_history_requires_a_checkpointer(settings):
+    router = CostAwareRouter(by_model(settings, {"fast": 0.95, "balanced": 0.95, "premium": 0.95}), settings)
+    router.run(Task(id="t1", prompt=EASY))
+    with pytest.raises(RuntimeError, match="checkpointer"):
+        router.history("t1")
 
 
 def test_recursion_limit_bounds_the_worst_case_path(settings):

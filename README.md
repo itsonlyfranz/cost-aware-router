@@ -10,7 +10,7 @@ A cost-aware agent router: **per-task token budgets**, **complexity-based model 
 
 ## Highlights
 
-- **LangGraph state machine:** the agent flow is a `StateGraph` with typed Pydantic state, five explicit nodes, conditional edges for the escalate/exit decision, a recursion limit as a loop safety net, and a checkpointer that records state after every step so any decision can be replayed and audited.
+- **LangGraph state machine:** the agent flow is a `StateGraph` with typed Pydantic state, five explicit nodes, conditional edges for the escalate/exit decision, a recursion limit as a loop safety net, and an opt-in checkpointer that records state after every step so any decision can be replayed and audited.
 - **Complexity routing at zero cost:** a heuristic scorer (length, reasoning keywords, code, step count) picks a starting tier from fast, balanced or premium with no LLM call.
 - **Confidence-gated cascade:** a cheap model answers first with a self-reported confidence; the router exits early at the threshold or escalates one tier at a time.
 - **Hard per-task budgets:** token and USD caps size `max_tokens` before each call, downgrade tiers under pressure, and never make a call whose allowance doesn't fit.
@@ -19,7 +19,7 @@ A cost-aware agent router: **per-task token budgets**, **complexity-based model 
 
 ## Architecture
 
-Nodes of the LangGraph `StateGraph` (typed `RouterState`, checkpointed after every node):
+Nodes of the LangGraph `StateGraph` (typed `RouterState`, checkpointed after every node when a checkpointer is supplied):
 
 ```
  START ─► classify ─► plan_call ──(model fits budget)──► call_model ─► evaluate ──(exit_reason set)──► finalize ─► END
@@ -40,7 +40,7 @@ Nodes of the LangGraph `StateGraph` (typed `RouterState`, checkpointed after eve
 | `complexity.py` | Heuristic prompt-complexity score → starting tier |
 | `budget.py` | `TokenBudget`: token + USD limits, output allowance, charging actual usage |
 | `confidence.py` | Structured-output prompt and robust parser for the confidence signal |
-| `agent.py` | `CostAwareRouter`: builds and runs the LangGraph `StateGraph` (`RouterState`, nodes, conditional edges, checkpointer, recursion limit) |
+| `agent.py` | `CostAwareRouter`: builds and runs the LangGraph `StateGraph` (`RouterState`, nodes, conditional edges, optional checkpointer, recursion limit) |
 | `analytics.py` | Local JSONL `DecisionStore`, `summarize()`, text `render()` |
 | `client.py` | `LLMClient` protocol, `AnthropicClient` (Claude via `langchain-anthropic`), offline `FakeClient` |
 | `simulation.py` | Deterministic simulated models and demo workload |
@@ -110,7 +110,7 @@ The demo is a **simulation**: model confidence and answer lengths are scripted, 
 - **Budget pressure downgrades before it fails.** A premium-complexity task under a tight USD cap runs on a cheaper tier and is flagged in `route_reason`.
 - **Savings are measured against a counterfactual.** Baseline = one call on the baseline tier with the same prompt and the final answer's output length. It's an estimate, and it can be negative per decision (routing can cost more than the baseline) — aggregated numbers include those.
 - **Local-first storage.** Decisions are an append-only JSONL file; no database or hosted service.
-- **LangGraph where it fits, not everywhere.** The cascade is a real cycle with conditional exits, which is what `StateGraph` is for; checkpointing gives a per-step audit trail (`router.history(task_id)`) and the recursion limit bounds a routing loop. I did not add interrupts or parallel branches: the loop is inherently sequential (each escalation depends on the previous confidence), and a human-in-the-loop pause would defeat per-task cost control.
+- **LangGraph where it fits, not everywhere.** The cascade is a real cycle with conditional exits, which is what `StateGraph` is for; opt-in checkpointing (`CostAwareRouter(..., checkpointer=MemorySaver(serde=CHECKPOINT_SERDE))`) gives a per-step audit trail (`router.history(task_id)`); it is off by default so a long-lived router does not hold every task's state in memory, and the JSONL decision log remains the default audit record and the recursion limit bounds a routing loop. I did not add interrupts or parallel branches: the loop is inherently sequential (each escalation depends on the previous confidence), and a human-in-the-loop pause would defeat per-task cost control.
 - **LLM behind a one-method protocol** (`LLMClient.complete`), so the whole suite runs offline against `FakeClient`.
 - **Out of scope:** streaming, tool-use loops, caching, async/concurrency, a web UI, deployment.
 
@@ -124,5 +124,5 @@ All 47 tests are offline (`FakeClient`; `ChatAnthropic` is stubbed).
 | **Early exit on confidence** | `test_early_exit_when_confident_skips_higher_tiers`, `test_low_confidence_escalates_one_tier_at_a_time`, `test_top_tier_answer_is_accepted_even_if_unconfident`, `test_threshold_is_configurable`, `test_unparseable_reply_counts_as_not_confident`; parser behaviour in `test_confidence.py` |
 | **Token budgeting** | `test_budget.py` (allowance math, USD and token caps, overshoot clamp); `test_router.py` budget tests: `max_tokens` capped on the wire, no call when nothing fits, strict mode raises, USD cap downgrades premium to a cheaper model, escalation stops (and never re-calls a lower tier) when the next tier is unaffordable |
 | **Cost-per-decision analytics** | `test_analytics.py`: JSONL round-trip, totals equal sum of decisions, p50/p95, per-model/tier breakdown, escalation rate, ≥40% savings vs always-premium on easy-heavy traffic, and negative savings reported honestly when the baseline is cheaper |
-| **LangGraph structure** | `test_router.py`: expected nodes and conditional edges exist, checkpointer records monotonic per-step spend ending at the decision's cost, recursion limit covers the worst-case three-tier path |
+| **LangGraph structure** | `test_router.py`: expected nodes and conditional edges exist, an explicitly supplied checkpointer records monotonic per-step spend ending at the decision's cost, `history()` without one fails clearly, recursion limit covers the worst-case three-tier path |
 | **Config, CLI, client** | `test_config_cli.py` (env overrides, `.env` precedence, demo end-to-end, demo savings in the 40–70% band, clean failure without an API key); `test_anthropic_client.py` (request/usage mapping) |
